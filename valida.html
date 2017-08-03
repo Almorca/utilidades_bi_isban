@@ -1,0 +1,1286 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<title>Validación de workflows de Isban</title>
+<!--
+Copyright (c) 2012 Alejandro Moreno Calvo
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+-->
+<style>
+  .Error td:first-child { color: red;}
+  .Warning td:first-child { color: orange;}
+  .Ok {color: green;}
+  .Oculto { display: none; }
+  table { border-collapse:collapse;}
+  td, th { padding: 0.3em; border: 1px solid black;}
+  a {color: blue; text-decoration: underline;}
+</style>
+<script type="text/javascript">
+  <!--
+  
+	/**
+	* Web que ayuda a pasar las validaciones de QA definidas por ISBAN. Esta web comprueba las mayoría de validaciones que se pueden automatizar pero no es ni mucho menos algo exhaustivo y una revisión manual siempre es necesaria.
+	*
+	* @autor Alejandro Moreno < www.almorca.es >
+	* @license MIT License
+	*/
+
+  /* Variables globales */
+  var _nWorkflows; // Número de workflows.
+  var nErrores; // Número de Errores encontrados.
+  var _proyecto;
+  var _codigoTecnico;
+  var _codigoProyecto;
+  var _codigoGlobal = '361';
+  var _versionValidacion = '0.2.3'
+  var _transformaciones = new Hash(); /* Tabla con una lista de transformaciones asociada a otra tabla hash con los campos */
+  var _longitudMinimaNombreTransformaciones = 10;
+
+
+  /* Funciones genéricas */
+  /** Elimina los elementos hijos de un nodo */
+  function removeChildrenFromNode(node) {
+	if(node.hasChildNodes()) {
+	  while(node.childNodes.length >= 1 ) {
+		node.removeChild(node.firstChild);
+	  }
+	}
+  }
+
+
+  /** Añade el método trim() a los datos de tipo String */
+  String.prototype.trim = function() { return this.replace(/^\s+|\s+$/g, ""); };
+
+
+  /* Funciones del validador */
+  /** Imprime el resultado de una validación
+	  @param	{string}	typeMenssage	Error, Warning o Information
+	  @param	{string}	message	Mensaje con el resultado de la validación
+  */
+  function printValidation(typeMessage, message, workflow) {
+	var messageDOM = document.createElement('tr');
+	var auxDOM;
+	var text;
+
+	// Set the optional parameter if needed
+	if ( workflow === undefined ) {
+		workflow = ' ';
+	}
+
+	messageDOM.className = typeMessage;
+
+	auxDOM = document.createElement('td');
+	text = document.createTextNode(typeMessage);
+	auxDOM.appendChild(text);
+	messageDOM.appendChild(auxDOM);
+
+	text = document.createTextNode(workflow);
+	auxDOM = document.createElement('td');
+	auxDOM.appendChild(text);
+	messageDOM.appendChild(auxDOM);
+
+	text = document.createTextNode(message);
+	auxDOM = document.createElement('td');
+	auxDOM.appendChild(text);
+	messageDOM.appendChild(auxDOM);
+
+	document.getElementById('validaciones').appendChild(messageDOM);
+
+	if ( typeMessage == 'Error') {
+		nErrores++;
+	}
+  }
+
+	/**
+		Objeto que almacena un puerto de una transformación.
+	*/
+	function Field() {
+		this.name;
+		this.type; /* OUTPUT, INPUT, INPUT/OUTPUT, LOCAL VARIABLE */
+		this.used = null;
+		this.isInFormula = false;
+		
+		// Valores: null: no comprobado, output: se usa sólo como salida (para tipos INPUT/OUTPUT),
+		// input: se usa sólo como entrada(para tipos INPUT/OUTPUT), true: se usa correctamente
+
+		/** Inicialización de variables */
+		if ( arguments.length > 0 ) {
+			this.name = arguments[0];
+		}
+		if ( arguments.length > 1 ) {
+			this.type = arguments[1];
+		}
+		if ( arguments.length > 2 ) {
+			this.used = arguments[2];
+		}
+
+		/** Get name */
+		this.getName = function () {
+			return this.name;
+		}
+
+		/** Get if this port is been used */
+		this.getUsed = function () {
+			return this.used;
+		}
+
+		/** Get type */
+		this.getType = function () {
+			return this.type;
+		}
+
+		/** Set if this port is been used
+			@param	{object}	value	Is use or not
+		*/
+		this.setUsed = function (value) {
+			this.used = value;
+		}
+
+		/** Change state field
+			@param	{object}	value	Input or Output
+		*/
+		this.changeUse = function (value) {
+			if (this.used != true) { // Si ya se está usando no comprobamos nada
+				if ((this.used == 'input' && value == 'output') ||
+					(this.used == 'output' && value == 'input')) {
+					this.used = true;
+				} else if ((this.type.indexOf('OUTPUT') >= 0) &&
+					(this.type.indexOf('INPUT') >= 0)) { // Puerto de entrada y salida
+					this.used = value;
+				} else { // Puerto sólo de entrada o sólo de salida
+					this.used = true;
+				}
+			}
+		}
+		
+		this.usedInFormula = function (value) {
+			this.isInFormula = value;
+		}
+		
+		this.isUsedInFormula = function () {
+			return this.isInFormula;
+		}
+	}
+
+	/** Objeto que representa una tabla hash
+		@see http://www.mojavelinux.com/articles/javascript_hashes.html
+	*/
+	function Hash() {
+	this.length = 0;
+	this.items = new Array();
+	for (var i = 0; i < arguments.length; i += 2) {
+		if (typeof(arguments[i + 1]) != 'undefined') {
+			this.items[arguments[i]] = arguments[i + 1];
+			this.length++;
+		}
+	}
+
+	this.removeItem = function(in_key)
+	{
+		var tmp_previous;
+		if (typeof(this.items[in_key]) != 'undefined') {
+			this.length--;
+			var tmp_previous = this.items[in_key];
+			delete this.items[in_key];
+		}
+
+		return tmp_previous;
+	}
+
+	this.getItem = function(in_key) {
+		return this.items[in_key];
+	}
+
+	this.setItem = function(in_key, in_value)
+	{
+		var tmp_previous;
+		if (typeof(in_value) != 'undefined') {
+			if (typeof(this.items[in_key]) == 'undefined') {
+				this.length++;
+			}
+			else {
+				tmp_previous = this.items[in_key];
+			}
+
+			this.items[in_key] = in_value;
+		}
+
+		return tmp_previous;
+	}
+
+	this.hasItem = function(in_key)
+	{
+		return typeof(this.items[in_key]) != 'undefined';
+	}
+
+	this.clear = function()
+	{
+		for (var i in this.items) {
+			delete this.items[i];
+		}
+
+		this.length = 0;
+	}
+}
+
+	/**
+		Su uso y utilidad: pasamos a la función una referencia a un elemento DOM (obtenida mediante document.getElementById('elIdentificador');, d21d o cualquier otro método de nuestro gusto) y un nombre de clase.
+		Si el atributo class del elemento ya contiene dicho nombre, se elimina.
+		@see http://dizque.lacalabaza.net/sotanos/2006/05/anadir-o-quitar-clases-toggleclassname/
+	*/
+	function deleteClass(el, name) {
+		// indica si hemos eliminado o no la clase
+		var deleted = false;
+
+		// obtenemos un array de nombres de clase
+		// dividiendo la cadena `className` en cada
+		// espacio
+		var aClasses = el.className.split(' ');
+
+		// recorremos el array para averiguar si
+		// contiene o no la clase que deseamos
+		// añadir/eliminar
+		for (var i = 0; !deleted && i < aClasses.length; ++i) {
+			if (aClasses[i] == name) { // si la contiene
+				// eliminamos el ítem del array
+				delete(aClasses[i]);
+				// e indicamos que ya la hemos borrado
+				deleted = true;
+			}
+		}
+
+		// volvemos a convertir el array en una cadena
+		// y la asignamos al atributo `class`
+		el.className = aClasses.join(' ');
+	}
+
+
+  /** Imprime un mensaje en el área de mensajes
+	  @param	{string}	message	Mensaje a imprimir
+	  @param	{string}	opt_class	Clase CSS que se le añadirá al mensaje (Optional)
+  */
+  function printMessage(message, opt_class) {
+	var messageDOM = document.createElement('p');
+	if ( opt_class != undefined ) {
+	  messageDOM.setAttribute('class', opt_class);
+	}
+	var text = document.createTextNode(message);
+	messageDOM.appendChild(text);
+	document.getElementById('mensajes').appendChild(messageDOM);
+  }
+
+  /** Limpia el área de  mensajes para una nueva validación */
+  function clearMessage () {
+	var messageNode = document.getElementById('validaciones');
+	removeChildrenFromNode(messageNode);
+	messageNode = document.getElementById('mensajes');
+	removeChildrenFromNode(messageNode);
+  }
+
+  /** Muestra solo los errores en el área de validaciones */
+  function seeErrors() {
+	var messageNode = document.getElementById('validaciones');
+	var warnings = messageNode.getElementsByTagName('tr');
+	var i;
+
+	for (i = 0; i < warnings.length; i++) {
+		if ( warnings[i].className != 'Error' ) {
+			warnings[i].className += ' Oculto';
+		}
+	}
+  }
+
+  /** Muestra todos los mensajes del área de validaciones */
+  function seeAll() {
+	var warnings = document.getElementById('validaciones').getElementsByTagName('tr');
+	var i;
+
+	for (i = 0; i < warnings.length; i++) {
+		deleteClass(warnings[i], 'Oculto');
+    }
+  }
+  /** Lee el archivo XML exportado de Powercenter */
+  function importXML(file) {
+	var reader = new FileReader();
+	var parser = new DOMParser();
+	
+	function pause(ms) {
+		ms += new Date().getTime();
+		while (new Date() < ms) {};
+	}
+	
+	reader.readAsText(file);
+	
+	alert('Pulse aceptar para comenzar la validación.');
+	
+	return parser.parseFromString(reader.result, "text/xml");
+  }
+
+  /** Pasa las validaciones relativas a los SessionExtension
+   * Valida:
+   *   - Target load plan debe ser Normal
+   *   - En las tablas se debe marcar una única opción, la de la operación a realizar, (Insert, Update o Delete)
+   * @param {xml}	session	Nodo de la sesión a validar
+   * @param	{string}	sesName	Nombre de la sesión
+   * @param	{string}	workflowName	Nombre del workflow al cual pertenece la sesión
+   */
+  function validaSessionExtension(session, sesName, workflowName) {
+	var i;
+	var j;
+	var sesAttribute;
+	var sesExtAttribute;
+	var nOperaciones = 0;
+	var tipo;
+
+	sesAttribute = session.getElementsByTagName('SESSIONEXTENSION');
+	for (i = 0; i < sesAttribute.length; i++) {
+		tipo = sesAttribute[i].getAttribute('NAME');
+		switch(tipo) {
+		case 'Relational Writer': // Es un Target de una base de datos
+			sesExtAttribute = sesAttribute[i].getElementsByTagName('ATTRIBUTE');
+			nOperaciones = 0;
+			for (j = 0; j < sesExtAttribute.length; j++) {
+				if ( sesExtAttribute[j].getAttribute('NAME') == 'Target load type' &&
+					sesExtAttribute[j].getAttribute('VALUE') == 'Bulk' ) {
+					printValidation('Error', 'En la sesión ' + sesName + ' el Target load type debe ser normal para el Target ' + sesAttribute[i].getAttribute('SINSTANCENAME'), workflowName);
+				}
+				if ( sesExtAttribute[j].getAttribute('NAME') == 'Insert' &&
+					sesExtAttribute[j].getAttribute('VALUE') == 'YES' ) {
+					nOperaciones++;
+				}
+				if ( sesExtAttribute[j].getAttribute('NAME') == 'Update as Update' &&
+					sesExtAttribute[j].getAttribute('VALUE') == 'YES' ) {
+					nOperaciones++;
+				}
+				if ( sesExtAttribute[j].getAttribute('NAME') == 'Update as Insert' &&
+					sesExtAttribute[j].getAttribute('VALUE') == 'YES' ) {
+					nOperaciones++;
+				}
+				if ( sesExtAttribute[j].getAttribute('NAME') == 'Update else Insert' &&
+					sesExtAttribute[j].getAttribute('VALUE') == 'YES' ) {
+					nOperaciones++;
+				}
+				if ( sesExtAttribute[j].getAttribute('NAME') == 'Delete' &&
+					sesExtAttribute[j].getAttribute('VALUE') == 'YES' ) {
+					nOperaciones++;
+				}
+			}
+			if (nOperaciones > 1) {
+				printValidation('Error', 'En la sesión ' + sesName + ' para el Target ' + sesAttribute[i].getAttribute('SINSTANCENAME') + ' se debe marcar una única opción, la de la operación a realizar (Insert, Update o Delete).', workflowName);
+			}
+			break;
+		case 'File Writer': // Es un Target de un fichero
+			sesExtAttribute = sesAttribute[i].getElementsByTagName('ATTRIBUTE');
+			for (j = 0; j < sesExtAttribute.length; j++) {
+				if ( sesExtAttribute[j].getAttribute('NAME') == 'Output file directory' &&
+					sesExtAttribute[j].getAttribute('VALUE') == '$PMTargetFileDir\\' ) {
+					printValidation('Error', 'En la sesión ' + sesName + ' para el Target ' + sesAttribute[i].getAttribute('SINSTANCENAME') + ' el directorio de destino no puede ser $PMTargetFileDir\\.', workflowName);
+				}
+			}
+			break;
+		case 'Flat File Lookup': // Lookup a fichero plano
+			sesExtAttribute = sesAttribute[i].getElementsByTagName('ATTRIBUTE');
+			for (j = 0; j < sesExtAttribute.length; j++) {
+				if ( sesExtAttribute[j].getAttribute('NAME') == 'Lookup source filename' &&
+					sesExtAttribute[j].getAttribute('VALUE') == '' ) {
+					printValidation('Error', 'En la sesión ' + sesName + ' para la Lookup ' + sesAttribute[i].getAttribute('SINSTANCENAME') + ' el campo "Lookup source filename" debe estar relleno.', workflowName);
+				}
+			}
+			break;
+		case 'Relational Lookup': // Lookup a una base de datos
+			sesExtAttribute = sesAttribute[i].getElementsByTagName('CONNECTIONREFERENCE');
+			for (j = 0; j < sesExtAttribute.length; j++) {
+				if ( sesExtAttribute[j].getAttribute('CNXREFNAME') == 'DB Connection' &&
+					sesExtAttribute[j].getAttribute('CONNECTIONNAME').substr(0, 'cnx_'.length) != 'cnx_' ) {
+					printValidation('Error', 'En la sesión ' + sesName + ' la Lookup ' + sesAttribute[i].getAttribute('SINSTANCENAME') + ' debe tener una conexión válida que empiece por "cnx_".', workflowName);
+				}
+			}
+			break;
+		}
+	}
+  }
+
+
+  /** Pasa las validaciones relativas a los SESSIONCOMPONENT
+   * Valida:
+   *   - Utilizar Opción ‘Fail task if any command fails’ en tareas de tipo comando
+   * @param {xml}	session	Nodo de la sesión a validar
+   * @param	{string}	sesName	Nombre de la sesión
+   */
+  function validaSessionComponent(session, sesName, workflowName) {
+	var i;
+	var j;
+	var sesComponent;
+	var commands;
+	var attributes;
+
+	sesComponent = session.getElementsByTagName('SESSIONCOMPONENT');
+	for (i = 0; i < sesComponent.length; i++) {
+		commands = sesComponent[i].getElementsByTagName('VALUEPAIR');
+		if (commands.length == 0) {
+			continue;
+		}
+		attributes = sesComponent[i].getElementsByTagName('ATTRIBUTE');
+		for (j = 0; j < attributes.length; j++) {
+			if ( attributes[j].getAttribute('NAME') == 'Fail task if any command fails' &&
+				attributes[j].getAttribute('VALUE') == 'NO' ) {
+				printValidation('Error', 'En la sesión ' + sesName + '. La opción "Fail task if any command fails" debe estar marcada para los comandos ' + sesComponent[i].getAttribute('REFOBJECTNAME'), workflowName);
+			}
+		}
+	}
+  }
+
+  /** Pasa las validaciones relativas a sesiones */
+  function validaSession (session, workflowName) {
+	var sesAttribute;
+	var sesName = session.getAttribute('NAME');
+	var aux;
+	var i;
+	var reusable = false;
+
+	// Comprobamos si la sesión es reusable
+	if ( session.getAttribute('REUSABLE') == 'YES' ) {
+		reusable = true;
+	}
+
+	// Validamos el nombre de la sesión
+	sesAttribute = sesName;
+	if ( reusable == true ) {
+		aux = 's_r_' + _proyecto;
+	} else {
+		aux = 's_' + _proyecto;
+	}
+	if (sesAttribute.substr(0, aux.length) != aux) {
+	  printValidation('Error', 'El nombre de la sesión ' + sesName + ' debe comenzar por ' + aux, workflowName);
+	}
+
+	// Validamos si la sesión tiene descripción
+	sesAttribute = session.getAttribute('DESCRIPTION');
+	aux = sesAttribute.trim().length;
+	if ( aux == 0) {
+	  printValidation('Error', 'La sesión ' + sesName + ' no tiene descripción.', workflowName);
+	}
+
+	/** Validamos los atributos de la sesión
+	 <i>Write Backward Compatible Session Log File</i> debe ser "yes"
+	 <i>Session Log File Name</i> debe ser "s_CódigoTécnico_CódigoProyecto_NombreDescriptivo.log"
+	 <i>Session Log File directory</i> debe ser "$PMSessionLogDir\"
+	*/
+	sesAttribute = session.getElementsByTagName('ATTRIBUTE');
+	aux = sesAttribute.length;
+	for(i = 0; i < aux; i++) {
+      switch(sesAttribute[i].getAttribute('NAME')) {
+		case 'Write Backward Compatible Session Log File':
+			if ( sesAttribute[i].getAttribute('VALUE') != 'YES' ) {
+				printValidation('Error', 'El campo "Write Backward Compatible Session Log File" de la sesión ' + sesName + ' debe estar marcado. Valor actual: ' + sesAttribute[i].getAttribute('VALUE'), workflowName);
+			}
+			break;
+		case 'Session Log File directory':
+			if ( sesAttribute[i].getAttribute('VALUE') != '$PMSessionLogDir\\' ) {
+				printValidation('Error', 'El campo "Session Log File directory" de la sesión ' + sesName + ' debe ser "$PMSessionLogDir\". Valor actual: ' + sesAttribute[i].getAttribute('VALUE'), workflowName);
+			}
+			break;
+		case 'Session Log File Name':
+			aux = sesName + '.log';
+			if ( sesAttribute[i].getAttribute('VALUE') != aux ) {
+				printValidation('Error', 'El campo "Session Log File Name" de la sesión ' + sesName + ' debe ser "' + aux + '. Valor actual: ' + sesAttribute[i].getAttribute('VALUE'), workflowName);
+			}
+			break;
+	  }
+    }
+
+	sesAttribute = session.getElementsByTagName('CONFIGREFERENCE');
+	sesAttribute = sesAttribute[0].getElementsByTagName('ATTRIBUTE');
+	aux = sesAttribute.length;
+	/* Validamos los atributos de la sesión
+	 <i>Save session log by</i> debe ser "Session timestamp"
+	 <i>Stop on errors</i> debe ser "$PMSessionErrorThreshold"
+	*/
+	for(i = 0; i < aux; i++) {
+		switch(sesAttribute[i].getAttribute('NAME')) {
+			case 'Save session log by':
+				if ( sesAttribute[i].getAttribute('VALUE') != 'Session timestamp' ) {
+					printValidation('Error', 'El campo "Save session log by" de la sesión ' + sesName + ' debe ser "Session timestamp". Valor actual: ' + sesAttribute[i].getAttribute('VALUE'), workflowName);
+				}
+				break;
+			case 'Stop on errors':
+				if ( sesAttribute[i].getAttribute('VALUE') != '$PMSessionErrorThreshold' ) {
+					printValidation('Error', 'El campo "Stop on errors" de la sesión ' + sesName + ' debe ser "$PMSessionErrorThreshold". Valor actual: ' + sesAttribute[i].getAttribute('VALUE'), workflowName);
+				}
+				break;
+		}
+	}
+
+	validaSessionExtension(session, sesName, workflowName);
+	validaSessionComponent(session, sesName, workflowName);
+  }
+
+  /** Pasa las validaciones relativas a las instancias de las sesiones del workflow */
+  function validaTaskInstance(task, wfName) {
+	var taskAttribute;
+	var taskName = task.getAttribute('NAME');
+	var reusable = false;
+
+	// Comprobamos si la sesión es reusable
+	if ( task.getAttribute('REUSABLE') == 'YES' ) {
+		reusable = true;
+	}
+
+	// Validamos el nombre de la instancia
+	taskAttribute = task.getAttribute('TASKNAME');
+	if (taskAttribute != taskName) {
+	  printValidation('Error', 'El nombre de la sesión ' + taskName + ' debe ser igual a ' + taskAttribute, wfName);
+	}
+
+	// Validamos si la instancia tiene descripción
+	taskAttribute = task.getAttribute('DESCRIPTION');
+	if (taskAttribute.trim().length == 0) {
+	  printValidation('Error', 'La sesión ' + taskName + ' no tiene descripción.', wfName);
+	}
+
+	// Comprobamos que esten marcadas las opciones "Fail parent if this task fails" y "Fail parent if this task does not run"
+	taskAttribute = task.getAttribute('FAIL_PARENT_IF_INSTANCE_DID_NOT_RUN');
+	if (taskAttribute != 'YES') {
+	  printValidation('Error', 'La opción "Fail parent if this task does not run" no está marcada para la sesión ' + taskName, wfName);
+	}
+	taskAttribute = task.getAttribute('FAIL_PARENT_IF_INSTANCE_FAILS');
+	if (taskAttribute != 'YES') {
+	  printValidation('Error', 'La opción "Fail parent if this task fails" no está marcada para la sesión ' + taskName, wfName);
+	}
+  }
+
+  /** Función que valida un parámetro dentro de un mapping */
+  function validaParametro( parametro, mapping ) {
+	var type = parametro.getAttribute('DATATYPE');
+	var name = parametro.getAttribute('NAME');
+	var prefix = { 'date/time' : 'a',
+	  'decimal' : 'd',
+	  'double' : 'f',
+	  'integer' : 'i',
+	  'nstring' : 'S',
+	  'real' : 'r',
+	  'ntext' : 'T',
+	  'small integer' : 'o',
+	  'string' : 's',
+	  'text' : 't'
+	};
+	var startWith = '$$P_' + prefix[type] + '_';
+
+
+	if (( parametro.getAttribute('ISPARAM') == 'YES' ) && ( name.substr(0, startWith.length) != startWith )) {
+		printValidation('Error', 'El nombre del parámetro ' + name + ' debe comenzar por ' + startWith, mapping);
+	}
+
+	if ( parametro.getAttribute('DESCRIPTION') == "" ) {
+		printValidation('Error', 'El parámetro ' + name + ' no tiene descripción.', mapping);
+	}
+  }
+
+  /** Función que valida una instancia de dentro de un mapping */
+  function validaInstanciaMapping( instance, mapping  ) {
+	var aux;
+
+	// Comprobamos que todas las instancias tengan descripción
+	if (instance.getAttribute('DESCRIPTION').trim() == '') {
+		printValidation('Error', 'La instancia ' + instance.getAttribute('NAME') + ' no tiene descripción.', mapping);
+	}
+
+	// Comprobamos que los source y los target sean shortcut
+	aux = instance.getAttribute('TYPE');
+	if ( aux == 'SOURCE' || aux == 'TARGET' ) {
+		aux = instance.getAttribute('TRANSFORMATION_NAME');
+		if (aux.substr(0, 'Shortcut_to_'.length) != 'Shortcut_to_') {
+			printValidation('Error', 'La instancia ' + aux + ' debe ser un Shortcut.', mapping);
+		}
+	}
+  }
+
+  /** Pasa las validaciones relativas a los campos de las transformaciones.
+	@param {string}	mpName	Nombre del mapping al cual pertenece la transformación.
+  */
+  function validaCamposTransformacion (transformation, mpName, mapping) {
+	var i;
+	var trAttribute;
+	var trName = transformation.getAttribute('NAME');
+	var attribute;
+	var hashTable = new Hash();
+
+	// Revisamos los campos de la transformación
+	trAttribute = transformation.getElementsByTagName('TRANSFORMFIELD');
+	for (i=0; i < trAttribute.length; i++) {
+		attribute = new Field(trAttribute[i].getAttribute('NAME'), trAttribute[i].getAttribute('PORTTYPE'));
+
+		/* Operaciones específicas para cada transformación */
+		switch(transformation.getAttribute('TYPE')) {
+			case 'Sorter':
+				if (trAttribute[i].getAttribute('ISSORTKEY') == 'YES') {
+					attribute.setUsed(true);
+				}
+			break;
+			case 'Aggregator':
+				if (trAttribute[i].getAttribute('EXPRESSIONTYPE') == 'GROUPBY') {
+					attribute.setUsed(true);
+				}
+			break;
+		}
+
+		/* Almacenamos el campo en la tabla hash */
+		hashTable.setItem(attribute.getName(), attribute);
+		/* Revisamos que el campo tenga descripción */
+		if (trAttribute[i].getAttribute('DESCRIPTION').trim().length == 0) {
+			printValidation('Information', 'El campo ' + attribute.getName() + ' en la transformación ' + trName + ' no tiene descripción.', mpName);
+		}
+	}
+
+	if (transformation.getAttribute('TYPE') == 'Filter') { // Comprobamos la regla del filter
+		trAttribute = transformation.getElementsByTagName('TABLEATTRIBUTE');
+		for (i=0; i < trAttribute.length; i++) {
+			if (trAttribute[i].getAttribute('NAME') == 'Filter Condition') {
+				hashTable = actualizaCamposUsadosPorCondicion(trAttribute[i].getAttribute('VALUE'), hashTable);
+			}
+		}
+	}
+
+	/* Guardamos la tabla hash con la lista de los campos */
+	_transformaciones.setItem(trName, hashTable);
+
+	validaVariablesSinUso(transformation, mpName, mapping, hashTable);
+	validaConexionCampos(transformation, mpName, mapping, hashTable);
+  }
+
+  /** Actualiza la lista de campos usados en función de una condición.
+	Es útil en filtros, router, etc.
+	@param {string}	condicion
+	@param	{Hash}	hashTable
+	@return {Hash}	hashTable	Tabla modificada
+  */
+  function actualizaCamposUsadosPorCondicion(condicion, hashTable) {
+	var i;
+
+	// Recorremos los campos viendo cuales se usan en la condición
+	// TODO: Comprobar que no se encuentren campos con nombre más largos:
+	//	Ej. Condicion: NOT(CAMPO1)
+	//	Si hashTable.items[i] es CAMPO la funcion devuelve que CAMPO se está usando en la condición.
+
+	/*for(i in hashTable.items) {
+		if ( hashTable.items[i].getUsed() != true) {
+			if (condicion.indexOf(hashTable.items[i].getName()) != -1) {
+				hashTable.items[i].setUsed(true);
+			}
+		}
+	}*/
+
+	for(i in hashTable.items) {
+		if ( hashTable.items[i].getUsed() != true) {
+			patron = '/.*' + hashTable.items[i].getName() + '\\W.*/i';
+			if (eval(patron).exec(condicion) != null) {
+				hashTable.items[i].setUsed(true);
+			}
+		}
+	}
+
+	return hashTable;
+  }
+
+
+  /**
+	Pasa las validaciones relativas a las transformaciones de tipo Router
+	<ul>
+		<li>Todos los grupos deben tener descripción</li>
+	</ul>
+	@param {node}	router	Nodo del router dentro del xml
+	@param {string}	mpName	Nombre del mapping al cual pertenece la transformación.
+  */
+  function validaRouter (router, mpName) {
+	// Revisamos que todos los grupos tengan descripción
+	var groups = router.getElementsByTagName('GROUP');
+	var i;
+
+	for(i=0; i < groups.length; i++) {
+		if (groups[i].getAttribute('TYPE') == 'OUTPUT') {
+			if (groups[i].getAttribute('DESCRIPTION').trim().length == 0) {
+				printValidation('Warning', 'El grupo ' + groups[i].getAttribute('NAME') + ' del router ' + router.getAttribute('NAME') + ' no tiene descripción.', mpName);
+			}
+		}
+	}
+  }
+
+
+  /**
+	Pasa las validaciones relativas a transformaciones dentro de un mapping que son las siguientes
+	<ul>
+	<li>Las transformaciones deben comenzar por: srt_ (sorter), exp_ (expresiones)...</li>
+	<li>La longitud de los nombres debe ser mayor que <i>_longitudMinimaNombreTransformaciones</i>. </li>
+	</ul>
+	@param {string}	mpName	Nombre del mapping al cual pertenece la transformación.
+	@param {node}	mapping	Nodo del mapping dentro del xml
+  */
+  function validaTransformacion (transformation, mpName, mapping) {
+	var trAttribute;
+	var longitudPrefijo;
+
+	trAttribute = transformation.getAttribute('TYPE');
+
+	// Validamos según el tipo de transformación
+	switch(trAttribute) {
+		case 'Sorter':
+			longitudPrefijo = 'srt_'.length;
+			if (transformation.getAttribute('NAME').substr(0, longitudPrefijo) != 'srt_') {
+				printValidation('Error', 'El sorter ' + transformation.getAttribute('NAME') + ' no comienza por srt_.', mpName);
+			}
+			if (transformation.getAttribute('NAME').length - longitudPrefijo < _longitudMinimaNombreTransformaciones) {
+				printValidation('Error', 'El nombre del sorter ' + transformation.getAttribute('NAME') + ' no tiene la longitud mínima de ' + _longitudMinimaNombreTransformaciones + ' caracteres.', mpName);
+			}
+			break;
+		case 'Expression':
+			longitudPrefijo = 'exp_'.length;
+			if (transformation.getAttribute('NAME').substr(0, longitudPrefijo) != 'exp_') {
+				printValidation('Error', 'La expression ' + transformation.getAttribute('NAME') + ' no comienza por exp_.', mpName);
+			}
+			if (transformation.getAttribute('NAME').length - longitudPrefijo < _longitudMinimaNombreTransformaciones) {
+				printValidation('Error', 'El nombre de la expresión ' + transformation.getAttribute('NAME') + ' no tiene la longitud mínima de ' + _longitudMinimaNombreTransformaciones + ' caracteres.', mpName);
+			}
+			break;
+		case 'Filter':
+			longitudPrefijo = 'fil_'.length;
+			if (transformation.getAttribute('NAME').substr(0, longitudPrefijo) != 'fil_') {
+				printValidation('Error', 'El nombre del filtro ' + transformation.getAttribute('NAME') + ' no comienza por fil_.', mpName);
+			}
+			if (transformation.getAttribute('NAME').length - longitudPrefijo < _longitudMinimaNombreTransformaciones) {
+				printValidation('Error', 'El nombre del filtro ' + transformation.getAttribute('NAME') + ' no tiene la longitud mínima de ' + _longitudMinimaNombreTransformaciones + ' caracteres.', mpName);
+			}
+			break;
+		case 'Lookup Procedure':
+			longitudPrefijo = 'lkp_'.length;
+			if (transformation.getAttribute('NAME').substr(0, longitudPrefijo) != 'lkp_') {
+				printValidation('Error', 'La Lookup Procedure ' + transformation.getAttribute('NAME') + ' del mapping ' + mpName + ' no comienza por lkp_.');
+			}
+			if (transformation.getAttribute('NAME').length - longitudPrefijo < _longitudMinimaNombreTransformaciones) {
+				printValidation('Error', 'El nombre de la Lookup Procedure ' + transformation.getAttribute('NAME') + ' del mapping ' + mpName + ' no tiene la longitud mínima de ' + _longitudMinimaNombreTransformaciones + ' caracteres.');
+			}
+			break;
+		case 'Aggregator':
+			longitudPrefijo = 'agg_'.length;
+			if (transformation.getAttribute('NAME').substr(0, longitudPrefijo) != 'agg_') {
+				printValidation('Error', 'El Aggregator ' + transformation.getAttribute('NAME') + ' del mapping ' + mpName + ' no comienza por agg_.');
+			}
+			if (transformation.getAttribute('NAME').length - longitudPrefijo < _longitudMinimaNombreTransformaciones) {
+				printValidation('Error', 'El nombre del Aggregator ' + transformation.getAttribute('NAME') + ' del mapping ' + mpName + ' no tiene la longitud mínima de ' + _longitudMinimaNombreTransformaciones + ' caracteres.');
+			}
+			break;
+		case 'Source Qualifier':
+			longitudPrefijo = 'sq_'.length;
+			if (transformation.getAttribute('NAME').substr(0, longitudPrefijo) != 'sq_') {
+				printValidation('Error', 'El Source Qualifier ' + transformation.getAttribute('NAME') + ' no comienza por sq_.', mpName);
+			}
+			if (transformation.getAttribute('NAME').length - longitudPrefijo < _longitudMinimaNombreTransformaciones) {
+				printValidation('Error', 'El nombre del Source Qualifier ' + transformation.getAttribute('NAME') + ' no tiene la longitud mínima de ' + _longitudMinimaNombreTransformaciones + ' caracteres.', mpName);
+			}
+			break;
+		case 'Router':
+			longitudPrefijo = 'rtr_'.length;
+			if (transformation.getAttribute('NAME').substr(0, longitudPrefijo) != 'rtr_') {
+				printValidation('Error', 'El Router ' + transformation.getAttribute('NAME') + ' del mapping ' + mpName + ' no comienza por rtr_.');
+			}
+			if (transformation.getAttribute('NAME').length - longitudPrefijo < _longitudMinimaNombreTransformaciones) {
+				printValidation('Error', 'El nombre del Router ' + transformation.getAttribute('NAME') + ' del mapping ' + mpName + ' no tiene la longitud mínima de ' + _longitudMinimaNombreTransformaciones + ' caracteres.');
+			}
+			validaRouter(transformation, mpName);
+			break;
+		case 'Custom Transformation':
+			if (transformation.getAttribute('TEMPLATENAME') == 'Union Transformation') {
+			longitudPrefijo = 'un_'.length;
+			if (transformation.getAttribute('NAME').substr(0, longitudPrefijo) != 'un_') {
+				printValidation('Error', 'La Union ' + transformation.getAttribute('NAME') + ' del mapping ' + mpName + ' no comienza por un_.');
+			}
+			if (transformation.getAttribute('NAME').length - longitudPrefijo < _longitudMinimaNombreTransformaciones) {
+				printValidation('Error', 'El nombre de la Union ' + transformation.getAttribute('NAME') + ' del mapping ' + mpName + ' no tiene la longitud mínima de ' + _longitudMinimaNombreTransformaciones + ' caracteres.');
+			}
+			break;
+			} else if (transformation.getAttribute('TEMPLATENAME') == 'SQL Transform') {
+				longitudPrefijo = 'sql_'.length;
+				if (transformation.getAttribute('NAME').substr(0, longitudPrefijo) != 'sql_') {
+					printValidation('Error', 'La SQL ' + transformation.getAttribute('NAME') + ' del mapping ' + mpName + ' no comienza por sql_.');
+				}
+				if (transformation.getAttribute('NAME').length - longitudPrefijo < _longitudMinimaNombreTransformaciones) {
+					printValidation('Error', 'El nombre de la SQL ' + transformation.getAttribute('NAME') + ' del mapping ' + mpName + ' no tiene la longitud mínima de ' + _longitudMinimaNombreTransformaciones + ' caracteres.');
+				}
+				break;
+			}
+		case 'Sequence':
+			longitudPrefijo = 'seq_'.length;
+			if (transformation.getAttribute('NAME').substr(0, longitudPrefijo) != 'seq_') {
+				printValidation('Error', 'La Custom Transformation ' + transformation.getAttribute('NAME') + ' del mapping ' + mpName + ' no comienza por seq_.');
+			}
+			if (transformation.getAttribute('NAME').length - longitudPrefijo < _longitudMinimaNombreTransformaciones) {
+				printValidation('Error', 'El nombre de la Custom Transformation ' + transformation.getAttribute('NAME') + ' del mapping ' + mpName + ' no tiene la longitud mínima de ' + _longitudMinimaNombreTransformaciones + ' caracteres.');
+			}
+			break;
+		case 'Input Transformation':
+			longitudPrefijo = 'mplt_'.length;
+			if (transformation.getAttribute('NAME').substr(0, longitudPrefijo) != 'mplt_') {
+				printValidation('Error', 'El Mapplet ' + transformation.getAttribute('NAME') + ' del mapping ' + mpName + ' no comienza por mplt_.');
+			}
+			if (transformation.getAttribute('NAME').length - longitudPrefijo < _longitudMinimaNombreTransformaciones) {
+				printValidation('Error', 'El nombre del Mapplet ' + transformation.getAttribute('NAME') + ' del mapping ' + mpName + ' no tiene la longitud mínima de ' + _longitudMinimaNombreTransformaciones + ' caracteres.');
+			}
+			break;
+		case 'Transaction Control':
+			longitudPrefijo = 'tc_'.length;
+			if (transformation.getAttribute('NAME').substr(0, longitudPrefijo) != 'tc_') {
+				printValidation('Error', 'El Transaction Control ' + transformation.getAttribute('NAME') + ' del mapping ' + mpName + ' no comienza por tc_.');
+			}
+			if (transformation.getAttribute('NAME').length - longitudPrefijo < _longitudMinimaNombreTransformaciones) {
+				printValidation('Error', 'El nombre del Transaction Control ' + transformation.getAttribute('NAME') + ' del mapping ' + mpName + ' no tiene la longitud mínima de ' + _longitudMinimaNombreTransformaciones + ' caracteres.');
+			}
+			break;
+		case 'Joiner':
+			longitudPrefijo = 'jnr_'.length;
+			if (transformation.getAttribute('NAME').substr(0, longitudPrefijo) != 'jnr_') {
+				printValidation('Error', 'El Joiner ' + transformation.getAttribute('NAME') + ' del mapping ' + mpName + ' no comienza por jnr_.');
+			}
+			if (transformation.getAttribute('NAME').length - longitudPrefijo < _longitudMinimaNombreTransformaciones) {
+				printValidation('Error', 'El nombre del Joiner ' + transformation.getAttribute('NAME') + ' del mapping ' + mpName + ' no tiene la longitud mínima de ' + _longitudMinimaNombreTransformaciones + ' caracteres.');
+			}
+			break;
+		case 'Update Strategy':
+			longitudPrefijo = 'upd_'.length;
+			if (transformation.getAttribute('NAME').substr(0, longitudPrefijo) != 'upd_') {
+				printValidation('Error', 'El Update Strategy ' + transformation.getAttribute('NAME') + ' del mapping ' + mpName + ' no comienza por upd_.');
+			}
+			if (transformation.getAttribute('NAME').length - longitudPrefijo < _longitudMinimaNombreTransformaciones) {
+				printValidation('Error', 'El nombre del Update Strategy ' + transformation.getAttribute('NAME') + ' del mapping ' + mpName + ' no tiene la longitud mínima de ' + _longitudMinimaNombreTransformaciones + ' caracteres.');
+			}
+			break;
+	  }
+
+	  // Comprobamos que los campos tengan descripciones
+	  validaCamposTransformacion(transformation, mpName, mapping);
+  }
+
+	/** Devuelve si un campo es usado en una fórmula o no.
+		@param {string}	campo	Nombre del campo a buscar en la fórmula.
+		@param {string}	formula	Fórmula donde se va a buscar el campo.
+		@return {Boolean}	True si el campo está en la fórmula. False en caso contrario.
+	*/
+	function isInFormula (campo, formula) {
+		return new RegExp("\\W" + campo + "\\W").test("(" + formula + ")");
+		// El poner paréntesis entre la fórmula es una ñapa para que la expresión regular funcione cuando en la fórmula viene sólo el nombre de un campo
+	}
+
+	/** Validamos que no haya variables y campos de entrada que no se usen
+		@param {string}	mpName	Nombre del mapping al cual pertenece la transformación.
+		@param {Hash}	hashTable	Tabla hash con los campos de la transformación.
+	*/
+	function validaVariablesSinUso (transformation, mpName, mapping, hashTable) {
+		var i;
+		var j;
+		var trAttribute;
+		var expression;
+		var type;
+		var trName = transformation.getAttribute('NAME');
+		var trType = transformation.getAttribute('TYPE');
+
+		/* Marcamos como usados las variables y los campos de entrada que se usan en 
+			las fórmulas de los campos de salida y de las variables */
+		if ( trType == 'Expression' || trType == 'Aggregator' ) {
+			trAttribute = transformation.getElementsByTagName('TRANSFORMFIELD');
+			for (i=0; i < trAttribute.length; i++) {
+				if ( (trAttribute[i].getAttribute('PORTTYPE') == 'OUTPUT' ) ||
+						(trAttribute[i].getAttribute('PORTTYPE') == 'LOCAL VARIABLE') ) {
+					expression = trAttribute[i].getAttribute('EXPRESSION');
+					for(j in hashTable.items) {
+						type = hashTable.items[j].getType();
+						if ( ( type == 'INPUT' || type == 'LOCAL VARIABLE' )  &&
+							isInFormula(j, expression) ) {
+							hashTable.items[j].usedInFormula(true);
+						}
+					}
+				}
+			}
+
+			for(i in hashTable.items) {
+				type = hashTable.items[i].getType();
+				if ( ( type == 'INPUT' ) && ( hashTable.items[i].isUsedInFormula() != true ) ) {
+					printValidation('Error', 'El campo ' + hashTable.items[i].getName() + ' en la expresión ' + trName + ' no se utiliza.', mpName);
+				}
+				if ( ( type == 'LOCAL VARIABLE' ) && ( hashTable.items[i].isUsedInFormula() != true ) ) {
+					printValidation('Error', 'La variable ' + hashTable.items[i].getName() + ' en la expresión ' + trName + ' no se utiliza.', mpName);
+				}
+			}
+		}
+
+		if ( trType == 'Filter' ) {
+			trAttribute = transformation.getElementsByTagName('TABLEATTRIBUTE');
+			for (i=0; i < trAttribute.length; i++) {
+				if ( trAttribute[i].getAttribute('NAME') == 'Filter Condition' ) {
+					expression = trAttribute[i].getAttribute('VALUE');
+					break;
+				}
+			}
+			trAttribute = transformation.getElementsByTagName('TRANSFORMFIELD');
+			for (i=0; i < trAttribute.length; i++) {
+				for(j in hashTable.items) {
+					if ( isInFormula(j, expression) ) {
+						hashTable.items[j].setUsed(true);
+					}
+				}
+			}
+
+			for(i in hashTable.items) {
+				type = hashTable.items[i].getType();
+				if ( ( type == 'INPUT' ) && ( hashTable.items[i].getUsed() != true ) ) {
+					printValidation('Error', 'El campo ' + hashTable.items[i].getName() + ' en la expresión ' + trName + ' no se utiliza.', mpName);
+				}
+				if ( ( type == 'LOCAL VARIABLE' ) && ( hashTable.items[i].getUsed() != true ) ) {
+					printValidation('Error', 'La variable ' + hashTable.items[i].getName() + ' en la expresión ' + trName + ' no se utiliza.', mpName);
+				}
+			}
+		}
+	}
+
+	/** Validamos las conexiones entre los campos
+		@param {string}	mpName	Nombre del mapping al cual pertenece la transformación.
+		@param {Hash}	hashTable	Tabla hash con los campos de la transformación.
+	*/
+	function validaConexionCampos (transformation, mpName, mapping, hashTable) {
+		var i;
+		var trans = transformation.getAttribute('NAME');
+		var conexions = mapping.getElementsByTagName('CONNECTOR');
+		var transType = transformation.getAttribute('TYPE');
+		var transFrom;
+		var transTo;
+		var field;
+		var type;
+
+		for(i = 0; i < conexions.length; i++) {
+			transFrom = conexions[i].getAttribute('FROMINSTANCE');
+			transTo = conexions[i].getAttribute('TOINSTANCE');
+			if ( transTo!=trans && transFrom!=trans ) { // sólo nos interesan los enlaces que implican a la transformación que estamos validando.
+				continue;
+			}
+
+			if ( transTo==trans ) { // Conexión de entrada
+				field = conexions[i].getAttribute('TOFIELD');
+				hashTable.getItem(field).changeUse('input');
+			} else { // Conexión de salida
+				field = conexions[i].getAttribute('FROMFIELD');
+				hashTable.getItem(field).changeUse('output');
+			}
+		}
+
+		for(i in hashTable.items) {
+			if ( ( hashTable.items[i].getType() != "LOCAL VARIABLE" ) &&  
+				( hashTable.items[i].getUsed() != true ) &&
+				(transType=='Update Strategy' || transType == 'Sorter' || transType== 'Aggregator' || 
+				transType== 'Joiner' || transType== 'Filter' || transType== 'Expression') ) { // TODO: comprobar el resto de tipos de expresiones
+				printValidation('Error', 'Revise las conexiones del campo ' + hashTable.items[i].getName() + ' en la expresión ' + trans, mpName);
+			}
+		}
+	}
+
+  /** Pasa las validaciones relativas a workflows */
+  function validaWorkflow (workflow, xmlFile) {
+	var wfAttribute;
+	var wfName = workflow.getAttribute('NAME');
+	var aux;
+	var aux2;
+	var i; // contador
+	var RegExPattern;
+	var sesionesTotales = workflow.parentNode.getElementsByTagName('SESSION');
+	var sesionesWorkflow = workflow.getElementsByTagName('TASKINSTANCE');
+
+	// Validamos el nombre del workflow
+	wfAttribute = wfName;
+	aux = 'wf_' + _proyecto;
+	if (wfAttribute.substr(0, aux.length) != aux) {
+	  printValidation('Error', 'El nombre del worflow debe comenzar por ' + aux, wfName);
+	}
+
+	// Validamos si el workflow tiene descripción
+	wfAttribute = workflow.getAttribute('DESCRIPTION');
+	aux = wfAttribute.trim().length;
+	if (aux == 0) {
+	  printValidation('Error', 'El worflow no tiene descripción.', wfName);
+	}
+
+	/* Validamos los atributos del Workflow
+	 <i>Write Backward Compatible Workflow Log File</i> debe ser "yes"
+	 <i>Save Workflow log by</i> debe ser "By Timestamp"
+	 <i>Collect performance data</i> debe ser "no".
+	 <i>Stop on errors</i> debe ser "$PMSessionErrorThreshold"
+	*/
+	wfAttribute = workflow.getElementsByTagName('ATTRIBUTE');
+	aux = wfAttribute.length;
+	for(i = 0; i < aux; i++) {
+      switch(wfAttribute[i].getAttribute('NAME')) {
+		case 'Write Backward Compatible Workflow Log File':
+			if ( wfAttribute[i].getAttribute('VALUE') != 'YES' ) {
+				printValidation('Error', 'El campo "Write Backward Compatible Workflow Log File" debe estar marcado.', wfName);
+			}
+			break;
+		case 'Save Workflow log by':
+			if ( wfAttribute[i].getAttribute('VALUE') != 'By timestamp' ) {
+				printValidation('Error', 'El campo "Save Workflow log by" debe ser "By Timestamp".', wfName);
+			}
+			break;
+		case 'Parameter Filename':
+			if (_codigoGlobal == '') {
+				aux2 = '$PMSourceFileDir\\' + _codigoTecnico + '\\' + _codigoProyecto + '\\' + wfName + '.par';
+			} else {
+				aux2 = '$PMSourceFileDir\\' + _codigoTecnico + '\\' + _codigoGlobal + '\\' + _codigoProyecto + '\\' + wfName + '.par';
+			}
+			if ( ( wfAttribute[i].getAttribute('VALUE') != aux2 )  && ( wfAttribute[i].getAttribute('VALUE') != '' ) ) {
+				printValidation('Error', 'El fichero de parámetros del worflow debe ser ' + aux2 + '. Valor actual: ' + wfAttribute[i].getAttribute('VALUE'), wfName);
+			}
+			break;
+		case 'Collect performance data':
+			if ( wfAttribute[i].getAttribute('VALUE') != 'NO' ) {
+				printValidation('Error', 'El campo "Collect performance data" del worflow debe estar desmarcado.', wfName);
+			}
+			break;
+	  }
+    }
+
+	/* Validamos las sesiones del workflow */
+	wfAttribute = xmlFile.getElementsByTagName('SESSION');
+	aux = wfAttribute.length;
+	for(j = 0; j < sesionesWorkflow.length; j++) {
+		nombreSesion = sesionesWorkflow[j].getAttribute('TASKNAME')
+		if (nombreSesion === 'Start') { // Ignoramos la Instancia Start ya que no es una sesión
+			continue;
+		}
+		i = 0;
+		while (sesionesTotales[i].getAttribute('NAME') != nombreSesion) {
+			i++;
+		}
+
+		validaSession(sesionesTotales[i], wfName);
+	}
+
+	/* Validamos las instancias de las sesiones del workflow */
+	wfAttribute = workflow.getElementsByTagName('TASKINSTANCE');
+	aux = wfAttribute.length;
+	for(i = 0; i < aux; i++) {
+		if (wfAttribute[i].getAttribute('TASKTYPE') != 'Start' ) {
+			validaTaskInstance(wfAttribute[i], wfName);
+		}
+    }
+
+	/* Validamos los enlaces entre sesiones del workflow */
+	wfAttribute = workflow.getElementsByTagName('WORKFLOWLINK');
+	aux = wfAttribute.length;
+	for(i = 0; i < aux; i++) {
+		aux2 = wfAttribute[i].getAttribute('FROMTASK');
+		//$s_r_m_JM_7321_APV_CE_TareaEnProceso.PrevTaskStatus=SUCCEEDED
+		RegExPattern = new RegExp('^\\s*\\$' + aux2 + '\.Status|PrevTaskStatus\\s*\=\\s*SUCCEEDED\\s*$', 'i');
+		if ( ( aux2 != 'Start' ) && ( ! wfAttribute[i].getAttribute('CONDITION').match(RegExPattern) ) ) {
+			printValidation('Error', 'La condición ' + wfAttribute[i].getAttribute('CONDITION') + ' entre las sesiones ' + aux2 + ' y ' + wfAttribute[i].getAttribute('TOTASK') + ' es incorrecta.', wfName);
+		}
+    }
+  }
+
+  /** Pasa las validaciones relativas a mapping */
+  function validaMapping (mapping) {
+	var mpAttribute;
+	var mpName = mapping.getAttribute('NAME');
+	var aux;
+	var i;
+
+	// Validamos el nombre del mapping
+	mpAttribute = mpName;
+	aux = 'm_' + _proyecto;
+	if (mpAttribute.substr(0, aux.length) != aux) {
+	  printValidation('Error', 'El nombre del mapping ' + mpAttribute + ' debe comenzar por ' + aux);
+	}
+
+	// Validamos si el mapping tiene descripción
+	mpAttribute = mapping.getAttribute('DESCRIPTION');
+	aux = mpAttribute.trim().length;
+	if (aux == 0) {
+	  printValidation('Error', 'El mapping ' + mpName + ' no tiene descripción.');
+	}
+
+	// Revisamos la nomenclatura de las transformaciones
+	mpAttribute = mapping.getElementsByTagName('TRANSFORMATION');
+	aux = mpAttribute.length;
+	for(i = 0; i < aux; i++) {
+		validaTransformacion(mpAttribute[i], mpName, mapping);
+	}
+
+	/* Validamos las instancias del mapping */
+	mpAttribute = mapping.getElementsByTagName('MAPPINGVARIABLE');
+	for(i = 0; i < mpAttribute.length; i++) {
+		validaParametro(mpAttribute[i], mpName);
+    }
+
+	/* Validamos los parámetros */
+	mpAttribute = mapping.getElementsByTagName('INSTANCE');
+	aux = mpAttribute.length;
+	for(i = 0; i < aux; i++) {
+		validaInstanciaMapping(mpAttribute[i], mpName);
+    }
+  }
+
+  /** Pasa las validaciones relativas a target */
+  function validaTarget (target) {
+	var targetAttribute;
+	var targetName = target.getAttribute('NAME');
+	var i;
+
+	// Validamos si el target tiene descripción
+	targetAttribute = target.getAttribute('DESCRIPTION');
+	if (targetAttribute.trim().length == 0) {
+	  printValidation('Error', 'El target ' + targetName + ' no tiene descripción.');
+	}
+
+	/* Validamos las descripciones de los campos */
+	targetAttribute = target.getElementsByTagName('TARGETFIELD');
+	for(i = 0; i < targetAttribute.length; i++) {
+		if (targetAttribute[i].getAttribute('DESCRIPTION').trim().length == 0) {
+			printValidation('Error', 'El campo ' + targetAttribute[i].getAttribute('NAME') + ' del target ' + targetName + ' no tiene descripción.');
+		}
+    }
+  }
+
+  /** Pasa las validaciones relativas a source */
+  function validaSource (source) {
+	var sourceAttribute;
+	var sourceName = source.getAttribute('NAME');
+	var i;
+
+	// Validamos si el source tiene descripción
+	sourceAttribute = source.getAttribute('DESCRIPTION');
+	if (sourceAttribute.trim().length == 0) {
+	  printValidation('Error', 'El source ' + sourceName + ' no tiene descripción.');
+	}
+
+	/* Validamos las descripciones de los campos */
+	sourceAttribute = source.getElementsByTagName('TARGETFIELD');
+	for(i = 0; i < sourceAttribute.length; i++) {
+		if (sourceAttribute[i].getAttribute('DESCRIPTION').trim().length == 0) {
+			printValidation('Error', 'El campo ' + sourceAttribute[i].getAttribute('NAME') + ' del source ' + sourceName + ' no tiene descripción.');
+		}
+    }
+  }
+
+
+  /** Obtiene la lista de workflows */
+  function getWorkflows(xmlFile) {
+	var i;
+	var workflows = xmlFile.getElementsByTagName('WORKFLOW');
+
+	// validamos los workflows
+	for(i = 0; i < workflows.length; i++) {
+      validaWorkflow(workflows[i], xmlFile);
+	  _nWorkflows++;
+    }
+  }
+
+  /** Obtiene la lista de mappings */
+  function getMappings(xmlFile) {
+	var i;
+	var mappings = xmlFile.getElementsByTagName('MAPPING');
+
+	// validamos los mappings
+	for(i = 0; i < mappings.length; i++) {
+      validaMapping(mappings[i]);
+    }
+  }
+
+   /** Obtiene la lista de target y los valida */
+  function getTargets(xmlFile) {
+	var i;
+	var targets = xmlFile.getElementsByTagName('TARGET');
+
+	// validamos los mappings
+	for (i = 0; i < targets.length; i++) {
+      validaTarget(targets[i]);
+    }
+  }
+
+     /** Obtiene la lista de sources y los valida */
+  function getSources(xmlFile) {
+	var i;
+	var sources = xmlFile.getElementsByTagName('SOURCE');
+
+	// validamos los mappings
+	for (i = 0; i < sources.length; i++) {
+      validaSource(sources[i]);
+    }
+  }
+
+  /** Funcion que valida una lista de workflows powercenter */
+  function valida() {
+	/* Asignamos las variables globales */
+	var file = document.getElementById('file').files;
+	var xmlFile = importXML(file[0]);
+	var aux;
+
+	if ( xmlFile==null ) {
+		return;
+	}
+	nErrores = 0;
+	_nWorkflows = 0;
+	_codigoGlobal = document.getElementById('subcodigo').value;
+	_proyecto = document.getElementById('proyecto').value;
+	aux = _proyecto.split('_');
+	_codigoTecnico = aux[0];
+	_codigoProyecto = aux[1];
+
+	clearMessage();
+
+	printMessage('Comenzando las validaciones.');
+	getWorkflows(xmlFile); // Validamos los workflows
+	getMappings(xmlFile); // Validamos los mappings
+	getTargets(xmlFile);
+	getSources(xmlFile);
+
+	printMessage('Se han validado ' + _nWorkflows + ' workflows.');
+	if (nErrores == 0) {
+	  printMessage('Los workflows se han validado sin Errores.', 'Ok');
+	} else {
+	  printMessage('Se han encontrado ' + nErrores + ' Errores.', 'Error');
+	}
+  }
+
+   //-->
+</script>
+</head>
+<body>
+<h1>Validación de workflows de Isban</h1>
+<p>Web que ayuda a pasar las validaciones de QA definidas por ISBAN. Esta web comprueba las mayoría de validaciones que se pueden automatizar pero no es ni mucho menos algo exhaustivo y una revisión manual siempre es necesaria.</p>
+<hr style="margin: 1em 0;" />
+<form>
+  <label for="subcodigo">Subcódigo:
+	<input type="text" name="subcodigo" id="subcodigo" value="" />
+  </label>
+  <label for="proyecto">Proyecto:
+	<input type="text" name="proyecto" id="proyecto" value="" autofocus required  />
+  </label>
+  <label for="xml">XML:
+	<input type="file" name="xml" id="file" accept="text/xml,application/xml" required  />
+  </label>
+  <a onclick="valida()" style="cursor: pointer;">Validar</a>
+</form>
+
+<div id="mensajes"></div>
+<p><a onclick="seeErrors()" style="cursor: pointer;">Ver sólo los errores</a> | <a onclick="seeAll()" style="cursor: pointer;">Ver todo</a></p>
+<table>
+<thead>
+<th>Error</th>
+<th>Workflow / Mapping</th>
+<th>Descripción</th>
+</thead>
+<tbody id="validaciones">
+</tbody>
+</table>
+
+</body>
+</html>
