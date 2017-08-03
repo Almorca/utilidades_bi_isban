@@ -1,0 +1,518 @@
+﻿<!doctype html>
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<title>Generador de documentación de QA de Isban</title>
+<!--
+Copyright (c) 2012 Alejandro Moreno Calvo
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+-->
+<style>
+  a {color: blue; cursor: pointer; text-decoration: underline;}
+</style>
+<script type="text/javascript">
+  <!--
+
+  /* Variables globales */
+  var _nWorkflows; // Número de workflows.
+  var _nErrores; // Número de Errores encontrados.
+  var _grupo;
+  var _proyecto;
+  var _codigoTecnico;
+  var _codigoProyecto;
+  var _codigoGlobal = '361';
+  var _versionValidacion = '0.1.0'
+  var _workflows = new Array(); /* Tabla con una lista de transformaciones asociada a otra tabla hash con los campos */
+  var _longitudMinimaNombreTransformaciones = 10;
+  var _cabecera = '<html xmlns:v=3D"urn:schemas-microsoft-com:vml"\nxmlns:o=3D"urn:schemas-microsoft-com:office:office"\nxmlns:w=3D"urn:schemas-microsoft-com:office:word"\nxmlns:m=3D"http://schemas.microsoft.com/office/2004/12/omml"\nxmlns=3D"http://www.w3.org/TR/REC-html40">\n<head>';
+  _cabecera = _cabecera + '<style>p.MsoNormal, li.MsoNormal, div.MsoNormal\n{margin-top:10.0pt;\nmargin-right:0cm;\nmargin-bottom:10.0pt;\nmargin-left:0cm;\ntext-align:justify;\ntext-indent:35.45pt;\nline-height:150%;\nfont-size:12.0pt;\nfont-family:"Arial","sans-serif";}h1\n{mso-style-update:auto;\nmso-style-priority:39;\nmso-style-unhide:no;\nmso-style-next:Normal;\nmargin-top:12.0pt;\nmargin-right:0cm;\nmargin-bottom:12.0pt;\nmargin-left:0cm;\ntext-align:justify;\nline-height:150%;\nmso-pagination:widow-orphan;\nfont-size:12.0pt;\nmso-bidi-font-size:13.0pt;\nfont-family:"Arial","serif";\nmso-fareast-font-family:"Arial";\nfont-weight:bold;\ncolor:navy;\nmso-border-top-alt:solid windowtext .5pt;mso-border-bottom-alt:solid windowtext .5pt;\nmso-padding-alt:1.0pt 0cm 1.0pt 0cm;\nfont-size:16.0pt;mso-outline-level:1;\nmso-list:l3 level1 lfo1;\npage-break-before:always\ntab-stops:list 26.35pt;}h2\n{margin-top:0cm;\nmargin-right:0cm;\nmargin-bottom:0cm;\nmargin-left:36.85pt;\nmargin-bottom:.0001pt;\ntext-indent:-10.5pt;\npage-break-after:avoid;\nfont-size:16.0pt;\nfont-family:"Arial","sans-serif";\nfont-weight:bold;}h3\n{margin-top:12.0pt;\nmargin-right:0cm;\nmargin-bottom:3.0pt;\nmargin-left:70.9pt;\ntext-indent:-1.0cm;\npage-break-after:avoid;\nfont-size:14.0pt;\nfont-family:"Arial","sans-serif";\nfont-weight:normal;} table{border-collapse:collapse; border: solid 1.5pt black;} thead {border: solid 1.5pt black;} td, th{border: 1px solid black;}\ntr.subtitle th { font: 8pt Arial, Sans-Serif; font-weight: normal; } td {text-align: center; } th {background:#D9D9D9}</style></head>\n<body>';
+  var _pie = '</body>\n</html>';
+
+  
+  /* Funciones genéricas */
+  /** Elimina los elementos hijos de un nodo */
+  function removeChildrenFromNode(node) {
+	if(node.hasChildNodes()) {
+	  while(node.childNodes.length >= 1 ) {
+		node.removeChild(node.firstChild);
+	  }
+	}
+  }
+
+
+  /** Añade el método trim() a los datos de tipo String */
+  String.prototype.trim = function() { return this.replace(/^\s+|\s+$/g, ""); };
+
+  
+  /* Funciones del validador */
+	/** Objeto que representa una tabla hash
+		@see http://www.mojavelinux.com/articles/javascript_hashes.html
+	*/
+	function Hash() {
+		this.length = 0;
+		this.items = new Array();
+		for (var i = 0; i < arguments.length; i += 2) {
+			if (typeof(arguments[i + 1]) != 'undefined') {
+				this.items[arguments[i]] = arguments[i + 1];
+				this.length++;
+			}
+		}
+	   
+		this.removeItem = function(in_key)
+		{
+			var tmp_previous;
+			if (typeof(this.items[in_key]) != 'undefined') {
+				this.length--;
+				var tmp_previous = this.items[in_key];
+				delete this.items[in_key];
+			}
+		   
+			return tmp_previous;
+		}
+
+		this.getItem = function(in_key) {
+			return this.items[in_key];
+		}
+
+		this.setItem = function(in_key, in_value)
+		{
+			var tmp_previous;
+			if (typeof(in_value) != 'undefined') {
+				if (typeof(this.items[in_key]) == 'undefined') {
+					this.length++;
+				}
+				else {
+					tmp_previous = this.items[in_key];
+				}
+
+				this.items[in_key] = in_value;
+			}
+		   
+			return tmp_previous;
+		}
+
+		this.hasItem = function(in_key)
+		{
+			return typeof(this.items[in_key]) != 'undefined';
+		}
+
+		this.clear = function()
+		{
+			for (var i in this.items) {
+				delete this.items[i];
+			}
+
+			this.length = 0;
+		}
+	}
+
+  /** Imprime un mensaje en el área de mensajes
+	  @param	{string}	message	Mensaje a imprimir
+	  @param	{string}	opt_class	Clase CSS que se le añadirá al mensaje (Optional)
+  */
+  function printMessage(message, opt_class) {
+	document.documentation.mensajes.value += message;
+  }
+
+  /** Limpia el área de  mensajes para una nueva validación */
+  function clearMessage () {
+	document.documentation.mensajes.value = '';
+  }
+
+  /** Lee el archivo XML exportado de Powercenter */
+  function importXML(file) {
+	var reader = new FileReader();
+	var parser = new DOMParser();
+	
+	function pause(ms) {
+		ms += new Date().getTime();
+		while (new Date() < ms) {};
+	}
+	
+	reader.readAsText(file);
+	
+	alert('Pulse aceptar para crear la documentación.');
+	
+	return parser.parseFromString(reader.result, "text/xml");
+  }
+  
+  
+  /** Obtenemos las transformaciones que tienen cache para mostrarlas en la documentación */
+  function imprimeCalculoCaches(xmlFile, sesion) {
+	var mapping;
+	var mpAttribute;
+	var mpName;
+	var i;
+	var j;
+	var trAttribute;
+	var transformation;
+	var f_volumetria = function( description ) {
+		var lines = description.split("\r\n");
+		for (var i = 0; i < lines.length; i++) {
+			var text = lines[i];
+
+			matches = /^[ ]*VOLUMEN[ ]*[:=][ ]*([\d\.]+).*$/.exec(text);
+
+			if (matches != null) {
+				printMessage('<td>' + matches[1] + '</td>');
+				return;
+			}
+		}
+		printMessage('<td>-</td>');
+	};
+
+	mapping = buscaMapping(xmlFile, sesion);
+	mpName = mapping.getAttribute('NAME');
+
+	// Revisamos la nomenclatura de las transformaciones
+	mpAttribute = mapping.getElementsByTagName('TRANSFORMATION');
+	for(i = 0; i < mpAttribute.length; i++) {
+		transformation = mpAttribute[i];
+		trAttribute = transformation.getAttribute('TYPE');
+		if (trAttribute == 'Sorter' || 
+			trAttribute == 'Aggregator' || 
+			trAttribute == 'Lookup Procedure' ||
+			trAttribute == 'Joiner') {
+			printMessage('<tr><td>'+ trAttribute + '</td>');
+			printMessage('<td>'+ transformation.getAttribute('NAME') + '</td>');
+			// Comprobamos si el campo está ordenado las transformaciones que no sean sorter
+			if (trAttribute != 'Sorter') {
+				trAttribute = transformation.getElementsByTagName('TABLEATTRIBUTE');
+				j = 0;
+				while ((trAttribute[j].getAttribute('NAME') != 'Sorted Input') && (j < trAttribute.length)){
+					j++
+				}
+				if (j < trAttribute.length && trAttribute[j].getAttribute('VALUE') == 'YES' ) {
+					printMessage('<td>Ordenado</td><td>AUTO</td><td>AUTO</td></tr>');
+				} else {
+					f_volumetria(transformation.getAttribute('DESCRIPTION'));
+					printMessage('<td>AUTO</td><td>AUTO</td></tr>');
+				}
+			} else {
+				f_volumetria(transformation.getAttribute('DESCRIPTION'));
+				printMessage('<td>AUTO</td><td>AUTO</td></tr>');
+			}
+		}
+	}
+	printMessage('</table>');
+  }
+
+  /** Obtiene la lista de workflows */
+  function getWorkflows(xmlFile) {
+	var i;
+	var workflows = xmlFile.getElementsByTagName('WORKFLOW');
+	
+	printMessage('<h1>Descripción del proceso</h1>');
+	printMessage('<p class="MsoNormal">El paquete de distribución contiene los workflows de la siguiente tabla, los cuales lanzan la ejecución de las sesiones de PowerCenter, correspondientes al proceso de generación y carga de datos de las siguientes tablas:</p>');
+	printMessage('<table class="MsoNormalTable" cellspacing=0 cellpadding=0 align=center>');
+	printMessage("<thead><tr><th>Workflow</th><th>Periodicidad Ejecución</th><th>Versión WF</th></tr></thead>");
+	// validamos los workflows
+	for(i = 0; i < workflows.length; i++) {
+		_workflows[i] = workflows[i].getAttribute('NAME');
+      printMessage("<tr><td>" + workflows[i].getAttribute('NAME') + "</td><td>Automático</td><td></td></tr>");
+    }
+	printMessage("</table>");
+	
+	printMessage("<h2>Clasificación de los workflows</h2>");
+	printMessage('<p class="MsoNormal">Estos workflows han sido clasificados como:</p>');
+	printMessage('<table class="MsoNormalTable" cellspacing=0 cellpadding=0 align=center>');
+	printMessage("<thead><tr><th>Workflow</th><th>Complejidad</th></tr></thead>");
+	// validamos los workflows
+	for(i = 0; i < workflows.length; i++) {
+		_workflows[i] = workflows[i].getAttribute('NAME');
+      printMessage("<tr><td>" + workflows[i].getAttribute('NAME') + "</td><td>Media</td></tr>");
+    }
+	printMessage("</table>");
+	printMessage("<h2>Observaciones generales</h2>");
+	printMessage('<p class="MsoNormal"></p>');
+  }
+  
+  function getDatosPaquete(xmlFile) {
+	printMessage("<h1>Datos del paquete de distribución</h1>");
+	printMessage("<h2>Nombre del paquete de distribución</h2>");
+	printMessage('<p class="MsoNormal">Grupo de pase ficticio: ' + _grupo + '</p>');
+	printMessage('<h2>Ámbito</h2>');
+	printMessage("<ul><li>Grupo de pase ficticio: " + _grupo + "</li>");
+	printMessage("<ul><li>Entidad</li>");
+	printMessage("<ul><li>Santander</li></ul>");
+	printMessage("</ul>");
+	printMessage("<ul><li>Repositorio origen</li>");
+	printMessage("<ul><li>PWC01_DES</li></ul>");
+	printMessage("</ul>");
+	printMessage("<ul><li>Repositorio destino</li>");
+	printMessage("<ul><li>PWC01_PRE</li></ul>");
+	printMessage("</ul>");
+	printMessage("</ul>");
+	
+	getContenido(xmlFile);
+  }
+  
+  function getContenido(xmlFile) {
+	printMessage("<h2 style='page-break-before:always'>Workflows</h2>");
+	getDatosWorkflows(xmlFile);
+  }
+  
+  /** 
+   * Obtiene los datos de los presession y postsession.
+   */
+  function getCommands (xmlFile, sesion) {
+	var i, j;
+	var sessionComponent = sesion.getElementsByTagName('SESSIONCOMPONENT');
+	var task;
+	var commands;
+	
+	if ( sessionComponent.length > 0 ) {
+		printMessage("<h4>Datos adicionales:</h4><ul>");
+		for(i = 0; i < sessionComponent.length; i++) {
+			task = sessionComponent[i].getElementsByTagName('TASK');
+			commands = task[0].getElementsByTagName('VALUEPAIR');
+			if ( commands.length > 0 ) {
+				printMessage('<li>' + sessionComponent[i].getAttribute('TYPE') + '</li><ul>');
+				for(j = 0; j < commands.length; j++) {
+					printMessage('<li>' + commands[j].getAttribute('NAME') + '=' + commands[j].getAttribute('VALUE')
+						+ '</li>');
+				}
+				printMessage('</ul>');
+			}
+		}
+		printMessage('</ul>');
+	}
+  }
+  
+  /** Obtiene la lista de workflows */
+  function getDatosWorkflows(xmlFile) {
+	var i;
+	var workflows = xmlFile.getElementsByTagName('WORKFLOW');
+	
+	for(i = 0; i < workflows.length; i++) {
+	    printMessage("<h3>" + workflows[i].getAttribute('NAME') + "</h3>");
+		getDatosSesion(xmlFile, workflows[i]);
+    }
+  }
+  
+  /** Obtenemos los datos de las sesiones */
+  function getDatosSesion(xmlFile, workflow) {
+	var i, j;
+	var sesionesTotales = workflow.parentNode.getElementsByTagName('SESSION');
+	var sesionesWorkflow = workflow.getElementsByTagName('TASKINSTANCE');
+	var mapping;
+	var nombreSesion;
+	
+	for(j = 0; j < sesionesWorkflow.length; j++) {
+		nombreSesion = sesionesWorkflow[j].getAttribute('TASKNAME')
+		if (nombreSesion === 'Start') { // Ignoramos la Instancia Start ya que no es una sesión
+			continue;
+		}
+		i = 0;
+		while (sesionesTotales[i].getAttribute('NAME') != nombreSesion) {
+			i++;
+		}
+		
+		printMessage('<h4>' + sesionesTotales[i].getAttribute('NAME') + '</h4>');
+		printMessage('<table class="MsoNormalTable" cellspacing=0 cellpadding=0 align=center>');
+		printMessage("<thead><tr><th>Tipo</th><th>Nombre</th><th>Volumetría</th><th>Caché real</th><th>Caché ajustada</th></tr></thead>");
+		getShortcut(sesionesTotales[i], xmlFile, true);
+		getShortcut(sesionesTotales[i], xmlFile, false);
+		
+		imprimeCalculoCaches(xmlFile, sesionesTotales[i]);
+		
+		printMessage('</table>');
+		
+		getCommands(xmlFile, sesionesTotales[i]);
+	}
+  }
+  
+	/** Dado una sesión devuelve su mapping asociado */
+	function buscaMapping(xmlFile, sesion) {
+		var i;
+		var mapping = sesion.getAttribute('MAPPINGNAME');
+		var mappings = xmlFile.getElementsByTagName('MAPPING');
+		
+		// Buscamos el mapping
+		i = 0;
+		while (( i < mappings.length) && (mappings[i].getAttribute('NAME') != mapping )) {
+			i++;
+		}
+		return mappings[i];
+	}
+  
+  /**
+	Funcion que busca las entradas o las salidas de una sesión y las imprime.
+  */
+  function getShortcut(sesion, xmlFile, isSource) {
+	var objetos;
+	var estructura;
+	var f_volumetria = function( description ) {
+		var lines = description.split("\r\n");
+		for (var i = 0; i < lines.length; i++) {
+			var text = lines[i];
+
+			matches = /^[ ]*VOLUMEN[ ]*[:=][ ]*(\d+).*$/.exec(text);
+
+			if (matches != null) {
+				return '<td>' + matches[1] + '</td>';
+			}
+		}
+		return '<td>-</td>';
+	};
+	
+	mapping = buscaMapping(xmlFile, sesion);
+	
+	objetos = mapping.getElementsByTagName('INSTANCE');
+	
+	if (isSource == true) { // Buscamos los source
+		tipo = 'Source Definition';
+		nombreAtributo = 'Source filename';
+		tipoFichero = 'File Reader';
+	} else { // Buscamos los target
+		tipo = 'Target Definition';
+		nombreAtributo = 'Output filename';
+		tipoFichero = 'File Writer';
+	}
+	
+	for (i = 0; i < objetos.length; i++) {
+		if (objetos[i].getAttribute('TRANSFORMATION_TYPE') == tipo) {
+			estructura = objetos[i].getAttribute('NAME');
+			// imprimimos la volumetria
+			printMessage("<tr>");
+			if (isSource == true) {
+				printMessage("<td>Source</td>");
+			} else {
+				printMessage("<td>Target</td>");
+			}
+			printMessage("<td>" + estructura + "</td>" + f_volumetria(objetos[i].getAttribute('DESCRIPTION')) +"<td>-</td><td>-</td></tr>");
+		}
+	}
+  }
+  
+	/**
+		Funcion que busca las conexiones usadas y las imprime.
+	*/
+	function getConexiones(xmlFile) {
+		var objetos;
+		var i;
+		var conexiones = new Array();
+		
+		objetos = xmlFile.getElementsByTagName('CONNECTIONREFERENCE');
+		
+		for (i = 0; i < objetos.length; i++) {
+			switch (objetos[i].getAttribute('CNXREFNAME')) {
+				case "DB Connection":
+					conexiones[objetos[i].getAttribute('CONNECTIONNAME')] = true;
+					break;
+				case "Connection":
+					if (objetos[i].getAttribute('CONNECTIONNAME').length > 0) { // Comprobamos que el nombre no esté vacío
+						conexiones[objetos[i].getAttribute('CONNECTIONNAME')] = true;
+					}
+					break;
+			}
+		}
+		
+		for (conexion in conexiones) {
+				printMessage(' ' + conexion);
+		}
+	}
+  
+	/** Obtiene la lista de workflows */
+  function getFicheros(xmlFile) {
+	var i;
+	var workflows = xmlFile.getElementsByTagName('WORKFLOW');
+	var ruta;
+	
+	printMessage("<h1>Objetos que residen en el repositorio de PWC</h1>");
+	printMessage('<h2>Carpetas</h2>');
+	printMessage('<p>Carpeta de traspaso en el servidor de Desarrollo e_' + _codigoTecnico + '. ');
+	ruta = (_codigoGlobal=='')?(_codigoTecnico+"_"+_codigoProyecto):(_codigoTecnico+"_"+_codigoGlobal+"_"+_codigoProyecto)
+	printMessage('La carpeta p_' + ruta + ' es necesaria, y debe existir tanto en pre-producción, producción y en el repositorio de QA.');
+	printMessage('<h2>Conexiones</h2>');
+	printMessage('<p>Se necesitan las conexiones');
+	getConexiones(xmlFile);
+	printMessage('.</p>');
+	printMessage("<h1>Objetos que residen en el servidor de PWC</h1>");
+	printMessage('<h2>Carpetas/Directorios</h2>');
+	printMessage('<p>Son necesarios los siguientes directorios para los workflows contenidos en el paquete de distribución: </p>');
+	ruta = (_codigoGlobal=='')?(_codigoTecnico+"\\"+_codigoProyecto):(_codigoTecnico+"\\"+_codigoGlobal+"\\"+_codigoProyecto)
+	printMessage("<ul><li>$PMSourceFileDir\\" + ruta + "</li><li>$PMTargetFileDir\\" + ruta + "</li></ul>");
+	printMessage('<h2>Ficheros de parámetros</h2>');
+	printMessage("<ul>");
+	for(i = 0; i < workflows.length; i++) {
+		_workflows[i] = workflows[i].getAttribute('NAME');
+		ruta = (_codigoGlobal=='')?(_codigoTecnico+"\\"+_codigoProyecto):(_codigoTecnico+"\\"+_codigoGlobal+"\\"+_codigoProyecto)
+		printMessage("<li>$PMSourceFileDir\\" + ruta + "\\" + workflows[i].getAttribute('NAME') + ".par</li>");
+    }
+	printMessage("</ul>");
+	printMessage('<h2>Otros ficheros</h2>');
+	printMessage('<p>Estos son los ficheros LOG de salida de los workflows indicados en el apartado “Workflows” de este documento.</p>');
+	printMessage('<table class="MsoNormalTable" cellspacing=0 cellpadding=0 align=center>');
+	printMessage("<thead><tr><th>Nombre Fichero</td><th>ASCII/Binario</th></tr></thead>");
+	// validamos los workflows
+	for(i = 0; i < workflows.length; i++) {
+		_workflows[i] = workflows[i].getAttribute('NAME');
+      printMessage("<tr><td>" + workflows[i].getAttribute('NAME') + ".log</td><td>ASCII</td></tr>");
+    }
+	printMessage("</table>");
+  }
+
+  /** Funcion que valida una lista de workflows powercenter */
+  function valida() {
+	/* Asignamos las variables globales */
+	var file = document.getElementById('file').files;
+	var xmlFile = importXML(file[0]);
+	var aux;
+
+	if ( xmlFile==null ) {
+		return;
+	}
+	_nErrores = 0;
+	_nWorkflows = 0;
+	_grupo = document.getElementById('grupo').value;
+	_codigoGlobal = document.getElementById('subcodigo').value;
+	_proyecto = document.getElementById('proyecto').value;
+	aux = _proyecto.split('_');
+	_codigoTecnico = aux[0];
+	_codigoProyecto = aux[1];
+	
+	clearMessage();
+
+	printMessage(_cabecera);
+	getWorkflows(xmlFile);
+	getDatosPaquete(xmlFile);
+	getFicheros(xmlFile);
+	printMessage(_pie);
+  }
+  
+	function selectText() {
+		document.documentation.mensajes.focus();
+		document.documentation.mensajes.select();
+	}
+	
+   //-->
+</script>
+</head>
+<body>
+<form name="documentation">
+  <label for="subcodigo">Subcódigo: 
+	<input type="text" name="subcodigo" id="subcodigo" value="" />
+  </label>
+  <label for="proyecto">Proyecto: 
+	<input type="text" name="proyecto" id="proyecto" value="JM_2807" />
+  </label>
+  <label for="grupo">Grupo de pase: 
+	<input type="text" name="grupo" id="grupo" value="dg_JM_2807_YYYYMMDDHHMM" />
+  </label>
+  <label for="file">XML: 
+	<input type="file" name="xml" id="file" />
+  </label>
+  <a onclick="valida()">Generar documento</a> |
+  <a onclick="selectText()">Seleccionar texto</a>
+  <hr />
+  <textarea name="mensajes" rows="20" cols="100"></textarea>
+</form>
+
+</body>
+</html>
