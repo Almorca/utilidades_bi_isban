@@ -1,4 +1,4 @@
-Este proyecto contiene varias utilidades que desarrolle en mi tiempo libre durante los años que trabajé para ISBAN desarrollando procesos de BI en Powercenter.
+Este proyecto contiene varias utilidades que desarrolle en mi tiempo libre durante los años que trabajé para ISBAN desarrollando procesos de BI en Powercenter 8.6.
 
 Puesto que hace años que ya no trabajo para ISBAN y que no uso estas utilidades es posible que las mismas ya no sean útiles e incluso que no funcionen.
 
